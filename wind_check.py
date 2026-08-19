@@ -195,7 +195,7 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
         gust = hourly["wind_gusts_10m"][i]
         direction = hourly["wind_direction_10m"][i]
 
-        by_date_all[date].append(speed)
+        by_date_all[date].append({"speed": speed, "gust": gust})
 
         meets_criteria = speed >= min_knots and not (
             gust_check and speed > 0 and (gust / speed) > max_gust_ratio
@@ -262,22 +262,33 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
                 "vorabend_hinweis": vorabend_hinweis,
             })
         else:
-            all_speeds = by_date_all.get(date, [])
-            avg_all_speed = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else None
+            all_hours = by_date_all.get(date, [])
+            if all_hours:
+                avg_all_speed = round(sum(h["speed"] for h in all_hours) / len(all_hours), 1)
+                avg_all_gust = round(sum(h["gust"] for h in all_hours) / len(all_hours), 1)
+            else:
+                avg_all_speed = None
+                avg_all_gust = None
             days.append({
                 "date": date,
                 "qualifies": False,
                 "avg_speed": avg_all_speed,
+                "avg_gust": avg_all_gust,
             })
 
     return days
 
 
 def format_day_line(day):
+    """Formatiert einen Tag für einen relevanten Spot (der mind. an einem Tag
+    Wind hat): schwache Tage zeigen die echte Windstärke/Böen ohne weitere
+    Details, Tage, die die Kriterien erfüllen, den vollen Eintrag mit Stern."""
     wd = WEEKDAYS_DE_KURZ[day["date"].weekday()]
 
     if not day["qualifies"]:
-        return f"{wd} —  kein Wind"
+        if day.get("avg_speed") is None:
+            return f"{wd} keine Daten"
+        return f"{wd} {day['avg_speed']}/{day['avg_gust']}kn"
 
     stern = " ⭐" if day["label"] == "top" else ""
     zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
@@ -292,25 +303,45 @@ def format_day_line(day):
     return zeile
 
 
+def format_best_day_line(name, days):
+    """Ein-Zeiler für Spots ohne nennenswerten Wind: bester Tag (höchster
+    Durchschnittswind, unabhängig von der Mindestschwelle) mit Wochentag."""
+    candidates = [d for d in days if d.get("avg_speed") is not None]
+    if candidates:
+        best = max(candidates, key=lambda d: d["avg_speed"])
+        wd = WEEKDAYS_DE_LANG[best["date"].weekday()]
+        return f"{name}: max {best['avg_speed']}kn am {wd}"
+    return f"{name}: keine Vorhersagedaten verfügbar"
+
+
 def build_message(spots, days_by_spot):
-    """Baut die Tagesübersicht pro Spot (Variante C). Gibt None zurück, wenn
-    an KEINEM Spot an KEINEM der nächsten Tage genug Wind zu erwarten ist –
-    dann übernimmt build_summary_message die Fallback-Nachricht."""
-    any_wind_anywhere = any(
-        any(day["qualifies"] for day in days)
-        for days in days_by_spot.values()
-    )
-    if not any_wind_anywhere:
+    """Baut die Nachricht: Spots mit mind. einem Tag über der Mindestschwelle
+    ('relevant') werden oben ausführlich mit Tages-für-Tag-Werten gezeigt,
+    alle anderen darunter nur als Ein-Zeiler. Gibt None zurück, wenn KEIN
+    Spot an KEINEM Tag genug Wind hat – dann übernimmt build_summary_message."""
+    relevant_names = {
+        spot["name"] for spot in spots
+        if any(day["qualifies"] for day in days_by_spot.get(spot["name"], []))
+    }
+    if not relevant_names:
         return None
 
+    relevant = [s for s in spots if s["name"] in relevant_names]
+    others = [s for s in spots if s["name"] not in relevant_names]
+
     lines = []
-    for spot in spots:
+    for spot in relevant:
         name = spot["name"]
         days = days_by_spot.get(name, [])
         lines.append(f"🏄 {name}")
         for day in days:
             lines.append(format_day_line(day))
         lines.append("")
+
+    if others:
+        lines.append("💤 Andere Spots ohne nennenswerten Wind:")
+        for spot in others:
+            lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], [])))
 
     return "\n".join(lines).strip()
 
@@ -322,16 +353,7 @@ def build_summary_message(spots, days_by_spot):
     lines = [f"🌬️ Kein Spot hat aktuell nennenswerten Wind (nächste {FORECAST_DAYS} Tage)", ""]
 
     for spot in spots:
-        name = spot["name"]
-        days = days_by_spot.get(name, [])
-        candidates = [d for d in days if d.get("avg_speed") is not None]
-
-        if candidates:
-            best = max(candidates, key=lambda d: d["avg_speed"])
-            wd = WEEKDAYS_DE_LANG[best["date"].weekday()]
-            lines.append(f"{name}: max {best['avg_speed']}kn am {wd}")
-        else:
-            lines.append(f"{name}: keine Vorhersagedaten verfügbar")
+        lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], [])))
 
     return "\n".join(lines)
 
