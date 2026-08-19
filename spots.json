@@ -16,6 +16,12 @@
       "offshore_direction": 112.5,
       "direction_zones": [
         { "from": 202, "to": 337, "label": "top", "kommentar": "SW/W/NW – beste Richtungen" }
+      ],
+      "location_zones": [
+        { "from": 67,  "to": 202, "ort": "Grevelingenmeer" },
+        { "from": 202, "to": 270, "ort": "bei Flut Ouddorp für Welle, sonst Grevelingenmeer" },
+        { "from": 270, "to": 315, "ort": "Nordende, Hafenmole (Flachwasser)" },
+        { "from": 315, "to": 67,  "ort": "Dünengürtel-Ende (Hauptspot)" }
       ]
     },
     {
