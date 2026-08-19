@@ -149,13 +149,15 @@ def evaluate_spot(spot, hourly, default_min_knots):
         earliest_hour = max(DAY_START_HOUR, DEPARTURE_HOUR + travel_hours)
 
     good_slots = []
+    early_slots = []  # gute Bedingungen VOR der Ankunftszeit bei Abfahrt am selben Morgen
+                       # -> Kandidat für "am Vorabend anreisen"
 
     for i, ts in enumerate(hourly["time"]):
         dt = datetime.fromisoformat(ts).replace(tzinfo=tz)
         if dt < now:
             continue
         hour_decimal = dt.hour + dt.minute / 60
-        if not (earliest_hour <= hour_decimal <= DAY_END_HOUR):
+        if not (DAY_START_HOUR <= hour_decimal <= DAY_END_HOUR):
             continue
 
         speed = hourly["wind_speed_10m"][i]
@@ -171,19 +173,24 @@ def evaluate_spot(spot, hourly, default_min_knots):
 
         label, kommentar = direction_label(direction, zones)
 
-        good_slots.append({
+        slot = {
             "zeit": dt,
             "speed": round(speed, 1),
             "gust": round(gust, 1),
             "direction": round(direction),
             "label": label,
             "kommentar": kommentar,
-        })
+        }
+
+        if not multi_day_only and hour_decimal < earliest_hour:
+            early_slots.append(slot)
+        else:
+            good_slots.append(slot)
 
     if multi_day_only:
         good_slots = filter_consecutive_days(good_slots, min_consecutive_days)
 
-    return good_slots
+    return good_slots, early_slots
 
 
 def location_hint(degrees, location_zones):
@@ -201,12 +208,18 @@ def location_hint(degrees, location_zones):
     return None
 
 
-def build_daily_summaries(slots, zones, offshore_direction, location_zones=None):
+def build_daily_summaries(slots, zones, offshore_direction, location_zones=None, early_slots=None):
     """Fasst die guten Stunden eines Spots pro Tag zu einem Zeitfenster mit
-    Durchschnittswerten zusammen (statt einzelner Stundenwerte)."""
+    Durchschnittswerten zusammen (statt einzelner Stundenwerte). Wenn es an
+    einem Tag schon vor der realistischen Ankunftszeit gute Bedingungen gibt
+    (early_slots), wird ein Hinweis auf eine mögliche Vorabend-Anreise ergänzt."""
     by_date = defaultdict(list)
     for s in slots:
         by_date[s["zeit"].date()].append(s)
+
+    early_by_date = defaultdict(list)
+    for s in (early_slots or []):
+        early_by_date[s["zeit"].date()].append(s)
 
     summaries = []
     for date, day_slots in sorted(by_date.items()):
@@ -220,6 +233,16 @@ def build_daily_summaries(slots, zones, offshore_direction, location_zones=None)
         avg_dir = average_direction(directions)
         label, kommentar = direction_label(avg_dir, zones)
 
+        vorabend_hinweis = None
+        early_for_date = sorted(early_by_date.get(date, []), key=lambda s: s["zeit"])
+        if early_for_date:
+            early_speed = round(sum(s["speed"] for s in early_for_date) / len(early_for_date), 1)
+            early_start = early_for_date[0]["zeit"].strftime("%H:%M")
+            vorabend_hinweis = (
+                f"Bereits ab {early_start} Uhr guter Wind (⌀{early_speed}kn) – "
+                f"ggf. lohnt sich eine Anreise schon am Vorabend."
+            )
+
         summaries.append({
             "start": day_slots[0]["zeit"],
             "end": day_slots[-1]["zeit"],
@@ -229,6 +252,7 @@ def build_daily_summaries(slots, zones, offshore_direction, location_zones=None)
             "shore": shore_type(avg_dir, offshore_direction),
             "ort": location_hint(avg_dir, location_zones or []),
             "label": label,
+            "vorabend_hinweis": vorabend_hinweis,
         })
 
     return summaries
@@ -244,10 +268,13 @@ def format_daily_summary(summary):
              f"(Böen ⌀{summary['avg_gust']}kn), {summary['compass']}{shore_str}{stern}{warn}")
     if summary.get("ort"):
         zeile += f"\n    📍 {summary['ort']}"
+    if summary.get("vorabend_hinweis"):
+        zeile += f"\n    🌙 {summary['vorabend_hinweis']}"
     return zeile
 
 
-def build_message(results, spots_by_name):
+def build_message(results, spots_by_name, early_by_spot=None):
+    early_by_spot = early_by_spot or {}
     lines = []
     any_hits = False
 
@@ -259,8 +286,9 @@ def build_message(results, spots_by_name):
         zones = spot.get("direction_zones", [])
         offshore_direction = spot.get("offshore_direction")
         location_zones = spot.get("location_zones", [])
+        early_slots = early_by_spot.get(spot_name, [])
 
-        summaries = build_daily_summaries(slots, zones, offshore_direction, location_zones)
+        summaries = build_daily_summaries(slots, zones, offshore_direction, location_zones, early_slots)
 
         suffix = f" ({spot.get('travel_hours', 0):g}h Anfahrt"
         suffix += ", mehrtägiger Trip)" if spot.get("multi_day_only") else ")"
@@ -343,19 +371,21 @@ def build_summary_message(hourly_by_spot, spots_by_name):
 def main():
     spots, default_min_knots = load_spots()
     results = {}
+    early_by_spot = {}
     hourly_by_spot = {}
 
     for spot in spots:
         try:
             hourly = fetch_forecast(spot["latitude"], spot["longitude"])
             hourly_by_spot[spot["name"]] = hourly
-            slots = evaluate_spot(spot, hourly, default_min_knots)
+            slots, early_slots = evaluate_spot(spot, hourly, default_min_knots)
             results[spot["name"]] = slots
+            early_by_spot[spot["name"]] = early_slots
         except Exception as e:
             print(f"Fehler bei Spot {spot['name']}: {e}", file=sys.stderr)
 
     spots_by_name = {s["name"]: s for s in spots}
-    message = build_message(results, spots_by_name)
+    message = build_message(results, spots_by_name, early_by_spot)
 
     if message:
         send_pushover(message)
