@@ -3,9 +3,11 @@
 Windsurf-Vorhersage-Check
 ==========================
 Holt für alle in spots.json definierten Spots die stündliche Windvorhersage
-von Open-Meteo (kostenlos, kein API-Key nötig), bewertet jede Stunde anhand
-der spot-spezifischen Kriterien (Mindestwind, Windrichtung, ggf. Böigkeit)
-und schickt eine zusammenfassende Empfehlung per Pushover.
+von Open-Meteo (kostenlos, kein API-Key nötig) und bestimmt für jeden der
+nächsten FORECAST_DAYS Tage das interessanteste Windfenster (Zeitspanne mit
+den besten, die Kriterien erfüllenden Stunden). Schickt eine Tagesübersicht
+pro Spot per Pushover – oder, falls nirgendwo genug Wind ist, eine kurze
+Fallback-Übersicht mit dem jeweils besten Tag pro Spot.
 
 Neuen Spot hinzufügen: siehe spots.json (kein Code ändern nötig).
 """
@@ -30,6 +32,9 @@ TIMEZONE = "Europe/Berlin"
 
 COMPASS_POINTS = ["N", "NNO", "NO", "ONO", "O", "OSO", "SO", "SSO",
                   "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+WEEKDAYS_DE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+WEEKDAYS_DE_LANG = ["Montag", "Dienstag", "Mittwoch", "Donnerstag",
+                     "Freitag", "Samstag", "Sonntag"]
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -105,6 +110,21 @@ def shore_type(direction_deg, offshore_deg):
         return "Onshore"
 
 
+def location_hint(degrees, location_zones):
+    """Gibt den passenden Startort/Bereich zurück, falls für den Spot
+    location_zones definiert sind (z.B. Möhnesee: welcher Bereich des Sees
+    je nach Windrichtung Sinn ergibt). None, wenn nichts passt."""
+    for zone in location_zones:
+        lo, hi = zone["from"], zone["to"]
+        if lo <= hi:
+            in_zone = lo <= degrees <= hi
+        else:
+            in_zone = degrees >= lo or degrees <= hi
+        if in_zone:
+            return zone.get("ort")
+    return None
+
+
 def filter_consecutive_days(slots, min_days):
     """Behält nur Slots, die zu einer Serie von >= min_days aufeinanderfolgenden
     Tagen mit gutem Wind gehören (für Spots, die sich nur für mehrtägige
@@ -129,7 +149,13 @@ def filter_consecutive_days(slots, min_days):
     return [s for s in slots if s["zeit"].date() in good_dates]
 
 
-def evaluate_spot(spot, hourly, default_min_knots):
+def evaluate_spot_days(spot, hourly, default_min_knots, now):
+    """Bestimmt für jeden der nächsten FORECAST_DAYS Tage das interessanteste
+    Windfenster (zusammenhängende Stunden, die die Kriterien erfüllen) sowie
+    Durchschnittswind und -böen darüber. Tage ohne qualifizierendes Fenster
+    bekommen trotzdem einen Eintrag (qualifies=False) mit dem unter allen
+    Tagesstunden gemittelten Wind, damit man bei Bedarf trotzdem den besten
+    Tag der Woche ermitteln kann."""
     min_knots = spot.get("min_knots", default_min_knots)
     gust_check = spot.get("gust_check", False)
     max_gust_ratio = spot.get("max_gust_ratio", 1.4)
@@ -137,9 +163,10 @@ def evaluate_spot(spot, hourly, default_min_knots):
     travel_hours = spot.get("travel_hours", 0)
     multi_day_only = spot.get("multi_day_only", False)
     min_consecutive_days = spot.get("min_consecutive_days", 2)
+    location_zones = spot.get("location_zones", [])
+    offshore_direction = spot.get("offshore_direction")
 
     tz = ZoneInfo(TIMEZONE)
-    now = datetime.now(tz)
 
     # Bei Tagesausflug-Spots lohnen sich Slots erst ab Ankunftszeit
     # (realistische Abfahrt + Fahrzeit). Bei Mehrtages-Spots (z.B. Grömitz)
@@ -148,9 +175,9 @@ def evaluate_spot(spot, hourly, default_min_knots):
     if not multi_day_only:
         earliest_hour = max(DAY_START_HOUR, DEPARTURE_HOUR + travel_hours)
 
-    good_slots = []
-    early_slots = []  # gute Bedingungen VOR der Ankunftszeit bei Abfahrt am selben Morgen
-                       # -> Kandidat für "am Vorabend anreisen"
+    by_date_all = defaultdict(list)    # alle Tagesstunden (auch unter Mindestwind), für Fallback
+    by_date_qual = defaultdict(list)   # Stunden, die alle Kriterien erfüllen UND ab Ankunftszeit liegen
+    by_date_early = defaultdict(list)  # Stunden, die alle Kriterien erfüllen, aber VOR Ankunftszeit liegen
 
     for i, ts in enumerate(hourly["time"]):
         dt = datetime.fromisoformat(ts).replace(tzinfo=tz)
@@ -160,149 +187,150 @@ def evaluate_spot(spot, hourly, default_min_knots):
         if not (DAY_START_HOUR <= hour_decimal <= DAY_END_HOUR):
             continue
 
+        date = dt.date()
         speed = hourly["wind_speed_10m"][i]
         gust = hourly["wind_gusts_10m"][i]
         direction = hourly["wind_direction_10m"][i]
 
-        if speed < min_knots:
-            continue
+        by_date_all[date].append(speed)
 
-        if gust_check and speed > 0 and (gust / speed) > max_gust_ratio:
-            # zu böig / unzuverlässig am Wasser
-            continue
+        meets_criteria = speed >= min_knots and not (
+            gust_check and speed > 0 and (gust / speed) > max_gust_ratio
+        )
+        if meets_criteria:
+            label, kommentar = direction_label(direction, zones)
+            slot = {
+                "zeit": dt,
+                "speed": round(speed, 1),
+                "gust": round(gust, 1),
+                "direction": round(direction),
+                "label": label,
+                "kommentar": kommentar,
+            }
+            if not multi_day_only and hour_decimal < earliest_hour:
+                by_date_early[date].append(slot)
+            else:
+                by_date_qual[date].append(slot)
 
-        label, kommentar = direction_label(direction, zones)
-
-        slot = {
-            "zeit": dt,
-            "speed": round(speed, 1),
-            "gust": round(gust, 1),
-            "direction": round(direction),
-            "label": label,
-            "kommentar": kommentar,
-        }
-
-        if not multi_day_only and hour_decimal < earliest_hour:
-            early_slots.append(slot)
-        else:
-            good_slots.append(slot)
-
+    # Grömitz: nur Tage behalten, die Teil einer Serie von >= min_consecutive_days
+    # aufeinanderfolgenden guten Tagen sind
     if multi_day_only:
-        good_slots = filter_consecutive_days(good_slots, min_consecutive_days)
+        all_qual_slots = [s for slots in by_date_qual.values() for s in slots]
+        filtered = filter_consecutive_days(all_qual_slots, min_consecutive_days)
+        keep_dates = set(s["zeit"].date() for s in filtered)
+        by_date_qual = {d: v for d, v in by_date_qual.items() if d in keep_dates}
 
-    return good_slots, early_slots
+    days = []
+    start_date = now.date()
+    for offset in range(FORECAST_DAYS):
+        date = start_date + timedelta(days=offset)
+        qual_slots = sorted(by_date_qual.get(date, []), key=lambda s: s["zeit"])
 
+        if qual_slots:
+            speeds = [s["speed"] for s in qual_slots]
+            gusts = [s["gust"] for s in qual_slots]
+            directions = [s["direction"] for s in qual_slots]
+            avg_speed = sum(speeds) / len(speeds)
+            avg_gust = sum(gusts) / len(gusts)
+            avg_dir = average_direction(directions)
+            label, kommentar = direction_label(avg_dir, zones)
 
-def location_hint(degrees, location_zones):
-    """Gibt den passenden Startort/Bereich zurück, falls für den Spot
-    location_zones definiert sind (z.B. Möhnesee: welcher Bereich des Sees
-    je nach Windrichtung Sinn ergibt). None, wenn nichts passt."""
-    for zone in location_zones:
-        lo, hi = zone["from"], zone["to"]
-        if lo <= hi:
-            in_zone = lo <= degrees <= hi
+            early_slots = sorted(by_date_early.get(date, []), key=lambda s: s["zeit"])
+            vorabend_hinweis = None
+            if early_slots:
+                early_speed = round(sum(s["speed"] for s in early_slots) / len(early_slots), 1)
+                early_start = early_slots[0]["zeit"].strftime("%H:%M")
+                vorabend_hinweis = (
+                    f"Bereits ab {early_start} Uhr guter Wind (⌀{early_speed}kn) – "
+                    f"ggf. lohnt sich eine Anreise schon am Vorabend."
+                )
+
+            days.append({
+                "date": date,
+                "qualifies": True,
+                "start": qual_slots[0]["zeit"],
+                "end": qual_slots[-1]["zeit"],
+                "avg_speed": round(avg_speed, 1),
+                "avg_gust": round(avg_gust, 1),
+                "compass": compass_direction(avg_dir),
+                "shore": shore_type(avg_dir, offshore_direction),
+                "ort": location_hint(avg_dir, location_zones),
+                "label": label,
+                "vorabend_hinweis": vorabend_hinweis,
+            })
         else:
-            in_zone = degrees >= lo or degrees <= hi
-        if in_zone:
-            return zone.get("ort")
-    return None
+            all_speeds = by_date_all.get(date, [])
+            avg_all_speed = round(sum(all_speeds) / len(all_speeds), 1) if all_speeds else None
+            days.append({
+                "date": date,
+                "qualifies": False,
+                "avg_speed": avg_all_speed,
+            })
+
+    return days
 
 
-def build_daily_summaries(slots, zones, offshore_direction, location_zones=None, early_slots=None):
-    """Fasst die guten Stunden eines Spots pro Tag zu einem Zeitfenster mit
-    Durchschnittswerten zusammen (statt einzelner Stundenwerte). Wenn es an
-    einem Tag schon vor der realistischen Ankunftszeit gute Bedingungen gibt
-    (early_slots), wird ein Hinweis auf eine mögliche Vorabend-Anreise ergänzt."""
-    by_date = defaultdict(list)
-    for s in slots:
-        by_date[s["zeit"].date()].append(s)
+def format_day_line(day):
+    wd = WEEKDAYS_DE_KURZ[day["date"].weekday()]
 
-    early_by_date = defaultdict(list)
-    for s in (early_slots or []):
-        early_by_date[s["zeit"].date()].append(s)
+    if not day["qualifies"]:
+        return f"{wd} —  kein Wind"
 
-    summaries = []
-    for date, day_slots in sorted(by_date.items()):
-        day_slots = sorted(day_slots, key=lambda s: s["zeit"])
-        speeds = [s["speed"] for s in day_slots]
-        gusts = [s["gust"] for s in day_slots]
-        directions = [s["direction"] for s in day_slots]
+    stern = " ⭐" if day["label"] == "top" else ""
+    zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
+    shore_str = f" {day['shore']}" if day["shore"] else ""
+    zeile = f"{wd} {zeitspanne}{stern} {day['avg_speed']}/{day['avg_gust']}kn {day['compass']}{shore_str}"
 
-        avg_speed = sum(speeds) / len(speeds)
-        avg_gust = sum(gusts) / len(gusts)
-        avg_dir = average_direction(directions)
-        label, kommentar = direction_label(avg_dir, zones)
+    if day.get("ort"):
+        zeile += f"\n   📍 {day['ort']}"
+    if day.get("vorabend_hinweis"):
+        zeile += f"\n   🌙 {day['vorabend_hinweis']}"
 
-        vorabend_hinweis = None
-        early_for_date = sorted(early_by_date.get(date, []), key=lambda s: s["zeit"])
-        if early_for_date:
-            early_speed = round(sum(s["speed"] for s in early_for_date) / len(early_for_date), 1)
-            early_start = early_for_date[0]["zeit"].strftime("%H:%M")
-            vorabend_hinweis = (
-                f"Bereits ab {early_start} Uhr guter Wind (⌀{early_speed}kn) – "
-                f"ggf. lohnt sich eine Anreise schon am Vorabend."
-            )
-
-        summaries.append({
-            "start": day_slots[0]["zeit"],
-            "end": day_slots[-1]["zeit"],
-            "avg_speed": round(avg_speed, 1),
-            "avg_gust": round(avg_gust, 1),
-            "compass": compass_direction(avg_dir),
-            "shore": shore_type(avg_dir, offshore_direction),
-            "ort": location_hint(avg_dir, location_zones or []),
-            "label": label,
-            "vorabend_hinweis": vorabend_hinweis,
-        })
-
-    return summaries
-
-
-def format_daily_summary(summary):
-    tag = summary["start"].strftime("%a %d.%m.")
-    zeitspanne = f"{summary['start'].strftime('%H:%M')}–{summary['end'].strftime('%H:%M')}"
-    stern = " ⭐" if summary["label"] == "top" else ""
-    warn = " ⚠️" if summary["label"] == "ungünstig" else ""
-    shore_str = f", {summary['shore']}" if summary["shore"] else ""
-    zeile = (f"{tag} {zeitspanne} Uhr: ⌀{summary['avg_speed']}kn "
-             f"(Böen ⌀{summary['avg_gust']}kn), {summary['compass']}{shore_str}{stern}{warn}")
-    if summary.get("ort"):
-        zeile += f"\n    📍 {summary['ort']}"
-    if summary.get("vorabend_hinweis"):
-        zeile += f"\n    🌙 {summary['vorabend_hinweis']}"
     return zeile
 
 
-def build_message(results, spots_by_name, early_by_spot=None):
-    early_by_spot = early_by_spot or {}
-    lines = []
-    any_hits = False
-
-    for spot_name, slots in results.items():
-        if not slots:
-            continue
-        any_hits = True
-        spot = spots_by_name[spot_name]
-        zones = spot.get("direction_zones", [])
-        offshore_direction = spot.get("offshore_direction")
-        location_zones = spot.get("location_zones", [])
-        early_slots = early_by_spot.get(spot_name, [])
-
-        summaries = build_daily_summaries(slots, zones, offshore_direction, location_zones, early_slots)
-
-        suffix = f" ({spot.get('travel_hours', 0):g}h Anfahrt"
-        suffix += ", mehrtägiger Trip)" if spot.get("multi_day_only") else ")"
-        lines.append(f"🏄 {spot_name}{suffix}")
-        # "top"-Tage zuerst, sonst chronologisch
-        sorted_summaries = sorted(summaries, key=lambda s: (s["label"] != "top", s["start"]))
-        for summary in sorted_summaries[:4]:
-            lines.append("  " + format_daily_summary(summary))
-        lines.append("")
-
-    if not any_hits:
+def build_message(spots, days_by_spot):
+    """Baut die Tagesübersicht pro Spot (Variante C). Gibt None zurück, wenn
+    an KEINEM Spot an KEINEM der nächsten Tage genug Wind zu erwarten ist –
+    dann übernimmt build_summary_message die Fallback-Nachricht."""
+    any_wind_anywhere = any(
+        any(day["qualifies"] for day in days)
+        for days in days_by_spot.values()
+    )
+    if not any_wind_anywhere:
         return None
 
+    lines = []
+    for spot in spots:
+        name = spot["name"]
+        days = days_by_spot.get(name, [])
+        lines.append(f"🏄 {name}")
+        for day in days:
+            lines.append(format_day_line(day))
+        lines.append("")
+
     return "\n".join(lines).strip()
+
+
+def build_summary_message(spots, days_by_spot):
+    """Fallback-Nachricht, wenn nirgendwo genug Wind ist: zeigt pro Spot nur
+    den besten Tag (höchster Durchschnittswind, unabhängig von der
+    Mindestschwelle) mit ausgeschriebenem Wochentag."""
+    lines = [f"🌬️ Kein Spot hat aktuell nennenswerten Wind (nächste {FORECAST_DAYS} Tage)", ""]
+
+    for spot in spots:
+        name = spot["name"]
+        days = days_by_spot.get(name, [])
+        candidates = [d for d in days if d.get("avg_speed") is not None]
+
+        if candidates:
+            best = max(candidates, key=lambda d: d["avg_speed"])
+            wd = WEEKDAYS_DE_LANG[best["date"].weekday()]
+            lines.append(f"{name}: max {best['avg_speed']}kn am {wd}")
+        else:
+            lines.append(f"{name}: keine Vorhersagedaten verfügbar")
+
+    return "\n".join(lines)
 
 
 def send_pushover(message, title="🌬️ Windsurf-Vorhersage"):
@@ -320,79 +348,28 @@ def send_pushover(message, title="🌬️ Windsurf-Vorhersage"):
     resp.raise_for_status()
 
 
-def build_summary_message(hourly_by_spot, spots_by_name):
-    """Fallback-Nachricht, wenn kein Spot die Mindestkriterien erfüllt: zeigt
-    pro Spot den Durchschnittswind der nächsten Tage (Tagesstunden), damit man
-    trotzdem einen Überblick hat."""
+def main():
+    spots, default_min_knots = load_spots()
     tz = ZoneInfo(TIMEZONE)
     now = datetime.now(tz)
 
-    lines = ["Kein Spot erfüllt aktuell genügend Wind bzw. die passende Richtung. "
-              "Hier trotzdem die Vorschau der nächsten Tage:", ""]
-
-    for spot_name, hourly in hourly_by_spot.items():
-        spot = spots_by_name[spot_name]
-        offshore_direction = spot.get("offshore_direction")
-        location_zones = spot.get("location_zones", [])
-
-        speeds, gusts, directions = [], [], []
-        for i, ts in enumerate(hourly["time"]):
-            dt = datetime.fromisoformat(ts).replace(tzinfo=tz)
-            if dt < now:
-                continue
-            if not (DAY_START_HOUR <= dt.hour <= DAY_END_HOUR):
-                continue
-            speeds.append(hourly["wind_speed_10m"][i])
-            gusts.append(hourly["wind_gusts_10m"][i])
-            directions.append(hourly["wind_direction_10m"][i])
-
-        if speeds:
-            avg_speed = sum(speeds) / len(speeds)
-            avg_gust = sum(gusts) / len(gusts)
-            avg_dir = average_direction(directions)
-            compass = compass_direction(avg_dir)
-            shore = shore_type(avg_dir, offshore_direction)
-            ort = location_hint(avg_dir, location_zones)
-            shore_str = f", {shore}" if shore else ""
-            zeile = (
-                f"🏄 {spot_name}: ⌀{round(avg_speed, 1)}kn "
-                f"(Böen ⌀{round(avg_gust, 1)}kn), {compass}{shore_str} "
-                f"(nächste {FORECAST_DAYS} Tage, {DAY_START_HOUR}-{DAY_END_HOUR} Uhr)"
-            )
-            if ort:
-                zeile += f"\n   📍 {ort}"
-            lines.append(zeile)
-        else:
-            lines.append(f"🏄 {spot_name}: keine Vorhersagedaten verfügbar")
-
-    return "\n".join(lines)
-
-
-def main():
-    spots, default_min_knots = load_spots()
-    results = {}
-    early_by_spot = {}
-    hourly_by_spot = {}
+    days_by_spot = {}
 
     for spot in spots:
         try:
             hourly = fetch_forecast(spot["latitude"], spot["longitude"])
-            hourly_by_spot[spot["name"]] = hourly
-            slots, early_slots = evaluate_spot(spot, hourly, default_min_knots)
-            results[spot["name"]] = slots
-            early_by_spot[spot["name"]] = early_slots
+            days_by_spot[spot["name"]] = evaluate_spot_days(spot, hourly, default_min_knots, now)
         except Exception as e:
             print(f"Fehler bei Spot {spot['name']}: {e}", file=sys.stderr)
 
-    spots_by_name = {s["name"]: s for s in spots}
-    message = build_message(results, spots_by_name, early_by_spot)
+    message = build_message(spots, days_by_spot)
 
     if message:
         send_pushover(message)
         print("Nachricht verschickt:\n")
         print(message)
     else:
-        summary = build_summary_message(hourly_by_spot, spots_by_name)
+        summary = build_summary_message(spots, days_by_spot)
         send_pushover(summary, title="🌬️ Windsurf-Vorhersage (kein Spot geeignet)")
         print("Kein Spot erfüllt die Kriterien – Übersichts-Nachricht verschickt:\n")
         print(summary)
