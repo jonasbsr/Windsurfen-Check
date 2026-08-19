@@ -1,0 +1,28 @@
+name: Windsurf Vorhersage Check
+
+on:
+  schedule:
+    # 06:00 UTC = 07:00/08:00 MEZ/MESZ – bei Bedarf anpassen
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}   # erlaubt manuelles Auslösen über den "Run workflow"-Button
+
+jobs:
+  check-wind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Windcheck ausführen
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: python wind_check.py
