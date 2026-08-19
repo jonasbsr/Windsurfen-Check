@@ -19,7 +19,7 @@
       ]
     },
     {
-      "name": "Strand Horst",
+       "name": "Strand Horst",
       "latitude": 52.328162,
       "longitude": 5.574751,
       "min_knots": 18,
@@ -29,6 +29,8 @@
       "direction_zones": [
         { "from": 157, "to": 202, "label": "top", "kommentar": "Süd – sideoffshore, ideal" },
         { "from": 67,  "to": 112, "label": "top", "kommentar": "Ost – sideoffshore, ideal" },
+        { "from": 23,  "to": 66,  "label": "top", "kommentar": "Nordost – sideshore, ideal" },
+        { "from": 203, "to": 247, "label": "top", "kommentar": "Südwest – sideshore, ideal" },
         { "from": 112, "to": 135, "label": "semi", "kommentar": "Ostsüdost – straight offshore, absteigen/reinlaufen nötig" },
         { "from": 292, "to": 315, "label": "semi", "kommentar": "Westnordwest – straight onshore, rausfahren schwierig" }
       ]
