@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 SPOTS_FILE = Path(__file__).parent / "spots.json"
-FORECAST_DAYS = 4          # wie viele Tage vorausschauen
+FORECAST_DAYS = 5          # wie viele Tage vorausschauen
 DAY_START_HOUR = 8         # nur Stunden zwischen 8 und 20 Uhr lokal betrachten
 DAY_END_HOUR = 20
 DEPARTURE_HOUR = 8.5       # realistische Abfahrtszeit (Mittelwert von 8-9 Uhr), für Anfahrt-Filter bei Tagesausflug-Spots
