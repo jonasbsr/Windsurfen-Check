@@ -6,8 +6,8 @@ Holt für alle in spots.json definierten Spots die stündliche Windvorhersage
 von Open-Meteo (kostenlos, kein API-Key nötig) und bestimmt für jeden der
 nächsten FORECAST_DAYS Tage das interessanteste Windfenster (Zeitspanne mit
 den besten, die Kriterien erfüllenden Stunden). Schickt eine Tagesübersicht
-pro Spot per Pushover – oder, falls nirgendwo genug Wind ist, eine kurze
-Fallback-Übersicht mit dem jeweils besten Tag pro Spot.
+pro Spot per Pushover UND ntfy – oder, falls nirgendwo genug Wind ist, eine
+kurze Fallback-Übersicht mit dem jeweils besten Tag pro Spot.
 
 Neuen Spot hinzufügen: siehe spots.json (kein Code ändern nötig).
 """
@@ -41,6 +41,9 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 PUSHOVER_API_URL = "https://api.pushover.net/1/messages.json"
 PUSHOVER_TOKEN = os.environ.get("PUSHOVER_TOKEN")
 PUSHOVER_USER = os.environ.get("PUSHOVER_USER")
+
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC")
 
 
 def load_spots():
@@ -335,17 +338,37 @@ def build_summary_message(spots, days_by_spot):
 
 def send_pushover(message, title="🌬️ Windsurf-Vorhersage"):
     if not PUSHOVER_TOKEN or not PUSHOVER_USER:
-        print("PUSHOVER_TOKEN oder PUSHOVER_USER fehlt – Nachricht wird nur ausgegeben:\n")
-        print(message)
+        print("PUSHOVER_TOKEN oder PUSHOVER_USER fehlt – Pushover-Versand übersprungen.")
         return
+    try:
+        resp = requests.post(PUSHOVER_API_URL, data={
+            "token": PUSHOVER_TOKEN,
+            "user": PUSHOVER_USER,
+            "title": title,
+            "message": message,
+        }, timeout=20)
+        resp.raise_for_status()
+        print("Pushover-Nachricht verschickt.")
+    except Exception as e:
+        print(f"Fehler beim Pushover-Versand: {e}", file=sys.stderr)
 
-    resp = requests.post(PUSHOVER_API_URL, data={
-        "token": PUSHOVER_TOKEN,
-        "user": PUSHOVER_USER,
-        "title": title,
-        "message": message,
-    }, timeout=20)
-    resp.raise_for_status()
+
+def send_ntfy(message, title="🌬️ Windsurf-Vorhersage"):
+    if not NTFY_TOPIC:
+        print("NTFY_TOPIC fehlt – ntfy-Versand übersprungen.")
+        return
+    try:
+        # JSON-Publish-API statt Header nutzen, da Emojis im Titel als
+        # HTTP-Header (Latin-1) sonst Probleme machen können.
+        resp = requests.post(NTFY_SERVER, json={
+            "topic": NTFY_TOPIC,
+            "title": title,
+            "message": message,
+        }, timeout=20)
+        resp.raise_for_status()
+        print("ntfy-Nachricht verschickt.")
+    except Exception as e:
+        print(f"Fehler beim ntfy-Versand: {e}", file=sys.stderr)
 
 
 def main():
@@ -366,12 +389,15 @@ def main():
 
     if message:
         send_pushover(message)
-        print("Nachricht verschickt:\n")
+        send_ntfy(message)
+        print("\nGesendete Nachricht:\n")
         print(message)
     else:
         summary = build_summary_message(spots, days_by_spot)
-        send_pushover(summary, title="🌬️ Windsurf-Vorhersage (kein Spot geeignet)")
-        print("Kein Spot erfüllt die Kriterien – Übersichts-Nachricht verschickt:\n")
+        title = "🌬️ Windsurf-Vorhersage (kein Spot geeignet)"
+        send_pushover(summary, title=title)
+        send_ntfy(summary, title=title)
+        print("\nKein Spot erfüllt die Kriterien – Übersichts-Nachricht verschickt:\n")
         print(summary)
 
 
