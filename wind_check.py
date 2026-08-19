@@ -179,7 +179,7 @@ def build_message(results, spots_by_name):
     return "\n".join(lines).strip()
 
 
-def send_pushover(message):
+def send_pushover(message, title="🌬️ Windsurf-Vorhersage"):
     if not PUSHOVER_TOKEN or not PUSHOVER_USER:
         print("PUSHOVER_TOKEN oder PUSHOVER_USER fehlt – Nachricht wird nur ausgegeben:\n")
         print(message)
@@ -188,19 +188,61 @@ def send_pushover(message):
     resp = requests.post(PUSHOVER_API_URL, data={
         "token": PUSHOVER_TOKEN,
         "user": PUSHOVER_USER,
-        "title": "🌬️ Windsurf-Vorhersage",
+        "title": title,
         "message": message,
     }, timeout=20)
     resp.raise_for_status()
 
 
+def build_summary_message(hourly_by_spot, spots_by_name):
+    """Fallback-Nachricht, wenn kein Spot die Mindestkriterien erfüllt:
+    zeigt pro Spot kurz den besten (stärksten) erwarteten Wind der nächsten
+    Tage, damit man trotzdem einen Überblick hat."""
+    tz = ZoneInfo(TIMEZONE)
+    now = datetime.now(tz)
+
+    lines = ["Kein Spot erfüllt aktuell genügend Wind bzw. die passende Richtung. "
+              "Hier trotzdem die Vorschau der nächsten Tage:", ""]
+
+    for spot_name, hourly in hourly_by_spot.items():
+        best = None
+        for i, ts in enumerate(hourly["time"]):
+            dt = datetime.fromisoformat(ts).replace(tzinfo=tz)
+            if dt < now:
+                continue
+            if not (DAY_START_HOUR <= dt.hour <= DAY_END_HOUR):
+                continue
+            speed = hourly["wind_speed_10m"][i]
+            if best is None or speed > best["speed"]:
+                best = {
+                    "zeit": dt,
+                    "speed": speed,
+                    "gust": hourly["wind_gusts_10m"][i],
+                    "direction": hourly["wind_direction_10m"][i],
+                }
+
+        if best:
+            tag = best["zeit"].strftime("%a %d.%m. %H:%M")
+            lines.append(
+                f"🏄 {spot_name}: max. {round(best['speed'], 1)}kn "
+                f"(Böen {round(best['gust'], 1)}kn) am {tag} Uhr, "
+                f"{round(best['direction'])}°"
+            )
+        else:
+            lines.append(f"🏄 {spot_name}: keine Vorhersagedaten verfügbar")
+
+    return "\n".join(lines)
+
+
 def main():
     spots, default_min_knots = load_spots()
     results = {}
+    hourly_by_spot = {}
 
     for spot in spots:
         try:
             hourly = fetch_forecast(spot["latitude"], spot["longitude"])
+            hourly_by_spot[spot["name"]] = hourly
             slots = evaluate_spot(spot, hourly, default_min_knots)
             results[spot["name"]] = slots
         except Exception as e:
@@ -214,7 +256,10 @@ def main():
         print("Nachricht verschickt:\n")
         print(message)
     else:
-        print("Kein Spot erfüllt aktuell die Kriterien – keine Nachricht verschickt.")
+        summary = build_summary_message(hourly_by_spot, spots_by_name)
+        send_pushover(summary, title="🌬️ Windsurf-Vorhersage (kein Spot geeignet)")
+        print("Kein Spot erfüllt die Kriterien – Übersichts-Nachricht verschickt:\n")
+        print(summary)
 
 
 if __name__ == "__main__":
