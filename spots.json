@@ -8,8 +8,8 @@
   "spots": [
     {
       "name": "Brouwersdam",
-      "latitude": 51.7333,
-      "longitude": 3.8500,
+      "latitude": 51.764824,
+      "longitude": 3.849204,
       "min_knots": 18,
       "gust_check": false,
       "travel_hours": 3.5,
@@ -20,8 +20,8 @@
     },
     {
       "name": "Strand Horst",
-      "latitude": 51.9270,
-      "longitude": 5.6270,
+      "latitude": 52.328162,
+      "longitude": 5.574751,
       "min_knots": 18,
       "gust_check": false,
       "travel_hours": 2.5,
@@ -35,27 +35,27 @@
     },
     {
       "name": "Möhnesee",
-      "latitude": 51.4790,
-      "longitude": 8.0670,
+      "latitude": 51.485431,
+      "longitude": 8.108853,
       "min_knots": 18,
       "gust_check": true,
-      "max_gust_ratio": 1.4,
+      "max_gust_ratio": 1.8,
       "travel_hours": 1.0,
       "offshore_direction": null,
       "_offshore_hinweis": "nicht sinnvoll, da für jede Richtung ein eigener Spot am Ufer passt",
       "direction_zones": [],
       "location_zones": [
         { "from": 157, "to": 247, "ort": "Porno-Beach oder Delecke (westlicher Teil, 1. Becken) – bei Süd/Südwest schirmen die Hügel den Rest des Sees ab" },
-        { "from": 247, "to": 337, "ort": "gesamter See gut belüftet (Start egal)" },
-        { "from": 67,  "to": 112, "ort": "gesamter See gut belüftet (Start egal)" }
+        { "from": 247, "to": 337, "ort": "Einstieg egal" },
+        { "from": 67,  "to": 112, "ort": "Einstieg egal" }
       ],
       "kommentar": "Jede Richtung hat einen passenden Spot vor Ort. Wichtig: kräftiger Wind und Böen nicht zu viel stärker als Basiswind (Binnengewässer-Effekt).",
       "_spotguide_hinweis": "Laut lokalem Spotguide: vorherrschend Südwestwind; bei West/Nordwest/Ost gesamter See gut, bei Süd/Südwest nur westlicher Teil (Hügel schirmen ab); ca. 1-2 gute Windtage/Woche im Sommer, mehr im Herbst/Winter/Frühling; teils sehr starke Böen."
     },
     {
       "name": "Grömitz",
-      "latitude": 54.1660,
-      "longitude": 10.9700,
+      "latitude": 54.137317,
+      "longitude": 10.951466,
       "min_knots": 18,
       "gust_check": false,
       "travel_hours": 5.0,
