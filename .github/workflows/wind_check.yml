@@ -2,8 +2,8 @@ name: Windsurf Vorhersage Check
 
 on:
   schedule:
-    # 06:00 UTC = 07:00/08:00 MEZ/MESZ – bei Bedarf anpassen
-    - cron: "0 6 * * *"
+    # 16:00 UTC = 17:00/18:00 MEZ/MESZ – bei Bedarf anpassen
+    - cron: "0 16 * * *"
   workflow_dispatch: {}   # erlaubt manuelles Auslösen über den "Run workflow"-Button
 
 jobs:
