@@ -1,0 +1,86 @@
+name: Windsurf Vorhersage Check
+
+on:
+  schedule:
+    # 16:00 UTC = 18:00 Uhr deutscher Zeit (Sommerzeit, UTC+2).
+    # Im Winter (UTC+1) kommt die Nachricht dadurch um 17:00 Uhr statt 18:00 Uhr.
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Nur an Test-Topic(s) senden (nicht an alle Abonnenten)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # ── Teil 1: Push-Benachrichtigung (Pushover + ntfy) ──────────────────────
+  push-benachrichtigung:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Windcheck ausführen
+        working-directory: push-benachrichtigung
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TEST: ${{ secrets.NTFY_TEST }}
+          NTFY_TOPIC_BFT: ${{ secrets.NTFY_TOPIC_BFT }}
+          NTFY_TOPIC_BFT_TEST: ${{ secrets.NTFY_TOPIC_BFT_TEST }}
+          TEST_MODE: ${{ inputs.test_mode }}
+        run: python wind_check.py
+
+  # ── Teil 2: App-Dashboard bauen und über GitHub Pages veröffentlichen ────
+  app-dashboard-bauen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Dashboard generieren
+        working-directory: app
+        run: python generate_dashboard.py
+
+      - name: Pages vorbereiten
+        uses: actions/configure-pages@v5
+
+      - name: Dashboard als Pages-Artefakt hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/site
+
+  app-dashboard-veroeffentlichen:
+    needs: app-dashboard-bauen
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Auf GitHub Pages veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4
