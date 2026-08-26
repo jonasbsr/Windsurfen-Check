@@ -28,6 +28,6 @@ jobs:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-          NTFY_TOPIC_TEST: ${{ secrets.NTFY_TOPIC_TEST }}
+          NTFY_TEST: ${{ secrets.NTFY_TEST }}
           TEST_MODE: ${{ inputs.test_mode }}
         run: python wind_check.py
