@@ -27,7 +27,7 @@ SPOTS_FILE = Path(__file__).parent / "spots.json"
 FORECAST_DAYS = 7          # wie viele Tage vorausschauen
 DAY_START_HOUR = 8         # nur Stunden zwischen 8 und 20 Uhr lokal betrachten
 DAY_END_HOUR = 20
-DEPARTURE_HOUR = 8       # realistische Abfahrtszeit (Mittelwert von 8-9 Uhr), für Anfahrt-Filter bei Tagesausflug-Spots
+DEPARTURE_HOUR = 8         # realistische Abfahrtszeit, für Anfahrt-Filter bei Tagesausflug-Spots
 TIMEZONE = "Europe/Berlin"
 
 COMPASS_POINTS = ["N", "NNO", "NO", "ONO", "O", "OSO", "SO", "SSO",
@@ -171,16 +171,13 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
 
     tz = ZoneInfo(TIMEZONE)
 
-    # Bei Tagesausflug-Spots lohnen sich Slots erst ab Ankunftszeit
-    # (realistische Abfahrt + Fahrzeit). Bei Mehrtages-Spots (z.B. Grömitz)
-    # spielt das für die Auswertung keine Rolle, da man vor Ort übernachtet.
     earliest_hour = DAY_START_HOUR
     if not multi_day_only:
         earliest_hour = max(DAY_START_HOUR, DEPARTURE_HOUR + travel_hours)
 
-    by_date_all = defaultdict(list)    # alle Tagesstunden (auch unter Mindestwind), für Fallback
-    by_date_qual = defaultdict(list)   # Stunden, die alle Kriterien erfüllen UND ab Ankunftszeit liegen
-    by_date_early = defaultdict(list)  # Stunden, die alle Kriterien erfüllen, aber VOR Ankunftszeit liegen
+    by_date_all = defaultdict(list)
+    by_date_qual = defaultdict(list)
+    by_date_early = defaultdict(list)
 
     for i, ts in enumerate(hourly["time"]):
         dt = datetime.fromisoformat(ts).replace(tzinfo=tz)
@@ -215,8 +212,6 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
             else:
                 by_date_qual[date].append(slot)
 
-    # Grömitz: nur Tage behalten, die Teil einer Serie von >= min_consecutive_days
-    # aufeinanderfolgenden guten Tagen sind
     if multi_day_only:
         all_qual_slots = [s for slots in by_date_qual.values() for s in slots]
         filtered = filter_consecutive_days(all_qual_slots, min_consecutive_days)
@@ -280,25 +275,19 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
 
 
 def format_day_line(day):
-    """Formatiert einen Tag für einen relevanten Spot (der mind. an einem Tag
-    Wind hat): schwache Tage zeigen die echte Windstärke/Böen ohne weitere
-    Details, Tage, die die Kriterien erfüllen, den vollen Eintrag mit Stern."""
+    """Formatiert einen Tag, der die Kriterien erfüllt: Wochentag, Zeitfenster,
+    Durchschnittswind/-böen, Richtung, Shore-Typ – Stern nur bei 'top'-Richtung.
+    Ort (falls vorhanden) steht in einer eigenen Zeile darunter."""
     wd = WEEKDAYS_DE_KURZ[day["date"].weekday()]
-
-    if not day["qualifies"]:
-        if day.get("avg_speed") is None:
-            return f"{wd} keine Daten"
-        return f"{wd} {day['avg_speed']}/{day['avg_gust']}kn"
-
-    stern = " ⭐" if day["label"] == "top" else ""
+    stern = "⭐ " if day["label"] == "top" else ""
     zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
     shore_str = f" {day['shore']}" if day["shore"] else ""
-    zeile = f"{wd} {zeitspanne}{stern} {day['avg_speed']}/{day['avg_gust']}kn {day['compass']}{shore_str}"
+    zeile = f"{stern}{wd} {zeitspanne} {day['avg_speed']}/{day['avg_gust']}kn {day['compass']}{shore_str}"
 
     if day.get("ort"):
-        zeile += f"\n   📍 {day['ort']}"
+        zeile += f"\n📍 {day['ort']}"
     if day.get("vorabend_hinweis"):
-        zeile += f"\n   🌙 {day['vorabend_hinweis']}"
+        zeile += f"\n🌙 {day['vorabend_hinweis']}"
 
     return zeile
 
@@ -316,9 +305,10 @@ def format_best_day_line(name, days):
 
 def build_message(spots, days_by_spot):
     """Baut die Nachricht: Spots mit mind. einem Tag über der Mindestschwelle
-    ('relevant') werden oben ausführlich mit Tages-für-Tag-Werten gezeigt,
-    alle anderen darunter nur als Ein-Zeiler. Gibt None zurück, wenn KEIN
-    Spot an KEINEM Tag genug Wind hat – dann übernimmt build_summary_message."""
+    ('relevant') werden oben gezeigt – dort NUR die qualifizierenden Tage,
+    schwache Tage werden bei relevanten Spots ausgeblendet. Alle anderen Spots
+    erscheinen darunter nur als Ein-Zeiler. Gibt None zurück, wenn KEIN Spot an
+    KEINEM Tag genug Wind hat – dann übernimmt build_summary_message."""
     relevant_names = {
         spot["name"] for spot in spots
         if any(day["qualifies"] for day in days_by_spot.get(spot["name"], []))
@@ -335,7 +325,8 @@ def build_message(spots, days_by_spot):
         days = days_by_spot.get(name, [])
         lines.append(f"🏄 {name}")
         for day in days:
-            lines.append(format_day_line(day))
+            if day["qualifies"]:
+                lines.append(format_day_line(day))
         lines.append("")
 
     if others:
@@ -380,8 +371,6 @@ def send_ntfy(message, title="🌬️ Windsurf-Vorhersage"):
         print("NTFY_TOPIC fehlt – ntfy-Versand übersprungen.")
         return
     try:
-        # JSON-Publish-API statt Header nutzen, da Emojis im Titel als
-        # HTTP-Header (Latin-1) sonst Probleme machen können.
         resp = requests.post(NTFY_SERVER, json={
             "topic": NTFY_TOPIC,
             "title": title,
