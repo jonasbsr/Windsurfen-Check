@@ -1,10 +1,12 @@
-name: Windsurf Vorhersage Check
-
 on:
   schedule:
-    # 16:00 UTC = 17:00/18:00 MEZ/MESZ – bei Bedarf anpassen
     - cron: "0 16 * * *"
-  workflow_dispatch: {}   # erlaubt manuelles Auslösen über den "Run workflow"-Button
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "Nur an Test-Topic senden (nicht an alle Abonnenten)"
+        type: boolean
+        default: false
 
 jobs:
   check-wind:
@@ -26,4 +28,6 @@ jobs:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOPIC_TEST: ${{ secrets.NTFY_TOPIC_TEST }}
+          TEST_MODE: ${{ inputs.test_mode }}
         run: python wind_check.py
