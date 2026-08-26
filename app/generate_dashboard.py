@@ -14,6 +14,7 @@ gepflegt wird.
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import html
 import json
 import re
 import shutil
@@ -40,46 +41,33 @@ def slugify(name):
     return re.sub(r"[^a-z0-9]+", "-", name).strip("-")
 
 
-def render_day_badge(day):
-    wd = wc.WEEKDAYS_DE_KURZ[day["date"].weekday()]
+def render_good_days_text(days):
+    """Zeigt die guten Tage im selben Textformat wie die Push-Nachricht
+    (format_day_line aus wind_check.py, wiederverwendet statt neu gebaut).
+    Gibt einen leeren String zurück, wenn kein Tag die Kriterien erfüllt –
+    dann bleibt nur das Diagramm stehen."""
+    good_days = [d for d in days if d["qualifies"]]
+    if not good_days:
+        return ""
 
-    if not day["qualifies"]:
-        if day.get("avg_speed") is None:
-            return f'<div class="day weak"><div class="wd">{wd}</div><div class="val">–</div></div>'
-        return f'''<div class="day weak">
-  <div class="wd">{wd}</div>
-  <div class="val">{day['avg_speed']}/{day['avg_gust']}kn</div>
-</div>'''
+    blocks = []
+    for day in good_days:
+        text = html.escape(wc.format_day_line(day, unit="kn"), quote=False)
+        blocks.append(f'<div class="goodday">{text.replace(chr(10), "<br>")}</div>')
 
-    stern = " ⭐" if day["label"] == "top" else ""
-    zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
-    shore = f'<div class="tag">{day["shore"]}</div>' if day.get("shore") else ""
-    ort = f'<div class="tag ort">📍 {day["ort"]}</div>' if day.get("ort") else ""
-    vorabend = f'<div class="tag ort">🌙 {day["vorabend_hinweis"]}</div>' if day.get("vorabend_hinweis") else ""
-
-    return f'''<div class="day good">
-  <div class="wd">{wd}{stern}</div>
-  <div class="time">{zeitspanne}</div>
-  <div class="val">{day['avg_speed']}/{day['avg_gust']}kn</div>
-  <div class="compass">{day['compass']}</div>
-  {shore}
-  {ort}
-  {vorabend}
-</div>'''
+    return f'<div class="goodtext">{"".join(blocks)}</div>'
 
 
 def render_spot_section(spot, days):
-    badges = "\n".join(render_day_badge(d) for d in days)
     reise = f"{spot.get('travel_hours', 0):g}h Anfahrt"
     if spot.get("multi_day_only"):
         reise += " · mehrtägiger Trip"
     slug = slugify(spot["name"])
+    good_html = render_good_days_text(days)
     return f'''<section class="spot">
   <h2>🏄 {spot["name"]} <span class="meta">({reise})</span></h2>
   <div class="chart-wrap"><canvas id="chart-{slug}" height="160"></canvas></div>
-  <div class="days">
-{badges}
-  </div>
+  {good_html}
 </section>'''
 
 
@@ -145,18 +133,14 @@ def build_html(spots, days_by_spot, updated):
     padding: 12px 8px;
     margin-bottom: 14px;
   }}
-  .days {{ display: flex; flex-wrap: wrap; gap: 10px; }}
-  .day {{
-    background: #14304f;
+  .goodtext {{ display: flex; flex-direction: column; gap: 10px; }}
+  .goodday {{
+    background: #0f4c2f;
     border-radius: 12px;
-    padding: 10px 14px;
-    min-width: 92px;
+    padding: 12px 14px;
+    line-height: 1.6;
+    font-size: 0.92em;
   }}
-  .day.good {{ background: #0f4c2f; }}
-  .day .wd {{ font-weight: 600; font-size: 0.95em; }}
-  .day .val {{ font-size: 1.15em; margin-top: 4px; font-weight: 600; }}
-  .day .time, .day .compass {{ font-size: 0.8em; color: #bcd0e6; margin-top: 2px; }}
-  .day .tag {{ font-size: 0.72em; color: #9db4cc; margin-top: 4px; max-width: 160px; }}
   footer {{ margin-top: 32px; color: #5f7691; font-size: 0.75em; }}
 </style>
 </head>
