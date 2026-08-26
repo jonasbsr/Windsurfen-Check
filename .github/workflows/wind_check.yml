@@ -1,10 +1,14 @@
+name: Windsurf Vorhersage Check
+
 on:
   schedule:
+    # 16:00 UTC = 18:00 Uhr deutscher Zeit (Sommerzeit, UTC+2).
+    # Im Winter (UTC+1) kommt die Nachricht dadurch um 17:00 Uhr statt 18:00 Uhr.
     - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       test_mode:
-        description: "Nur an Test-Topic senden (nicht an alle Abonnenten)"
+        description: "Nur an Test-Topic(s) senden (nicht an alle Abonnenten)"
         type: boolean
         default: false
 
@@ -29,5 +33,7 @@ jobs:
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_TEST: ${{ secrets.NTFY_TEST }}
+          NTFY_TOPIC_BFT: ${{ secrets.NTFY_TOPIC_BFT }}
+          NTFY_TOPIC_BFT_TEST: ${{ secrets.NTFY_TOPIC_BFT_TEST }}
           TEST_MODE: ${{ inputs.test_mode }}
         run: python wind_check.py
