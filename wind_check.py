@@ -44,7 +44,7 @@ PUSHOVER_USER = os.environ.get("PUSHOVER_USER")
 
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC_TEST") if TEST_MODE else os.environ.get("NTFY_TOPIC")
+NTFY_TOPIC = os.environ.get("NTFY_TEST") if TEST_MODE else os.environ.get("NTFY_TOPIC")
 
 
 def load_spots():
