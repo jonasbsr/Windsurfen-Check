@@ -41,20 +41,39 @@ def slugify(name):
     return re.sub(r"[^a-z0-9]+", "-", name).strip("-")
 
 
+def render_good_day_html(day):
+    """Rendert einen guten Tag fürs Dashboard: Wochentag + Uhrzeit groß/fett
+    als eigene Zeile, danach die restlichen Infos (Wind/Böen, Richtung,
+    Shore-Typ, Ort, Vorabend-Hinweis) wie gehabt darunter."""
+    wd_full = wc.WEEKDAYS_DE_LANG[day["date"].weekday()]
+    zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
+    header = html.escape(f"{wd_full} {zeitspanne}", quote=False)
+
+    stern = "⭐ " if day["label"] == "top" else ""
+    shore_str = f" {day['shore']}" if day.get("shore") else ""
+    lines = [f"{stern}{day['avg_speed']}/{day['avg_gust']}kn {day['compass']}{shore_str}"]
+
+    if day.get("ort"):
+        lines.append(f"📍 {day['ort']}")
+    if day.get("vorabend_hinweis"):
+        lines.append(f"🌙 {day['vorabend_hinweis']}")
+
+    body = "<br>".join(html.escape(line, quote=False) for line in lines)
+
+    return f'''<div class="goodday">
+  <div class="day-header">{header}</div>
+  <div class="day-body">{body}</div>
+</div>'''
+
+
 def render_good_days_text(days):
-    """Zeigt die guten Tage im selben Textformat wie die Push-Nachricht
-    (format_day_line aus wind_check.py, wiederverwendet statt neu gebaut).
-    Gibt einen leeren String zurück, wenn kein Tag die Kriterien erfüllt –
-    dann bleibt nur das Diagramm stehen."""
+    """Zeigt die guten Tage fürs Dashboard. Gibt einen leeren String zurück,
+    wenn kein Tag die Kriterien erfüllt – dann bleibt nur das Diagramm stehen."""
     good_days = [d for d in days if d["qualifies"]]
     if not good_days:
         return ""
 
-    blocks = []
-    for day in good_days:
-        text = html.escape(wc.format_day_line(day, unit="kn"), quote=False)
-        blocks.append(f'<div class="goodday">{text.replace(chr(10), "<br>")}</div>')
-
+    blocks = [render_good_day_html(day) for day in good_days]
     return f'<div class="goodtext">{"".join(blocks)}</div>'
 
 
@@ -138,6 +157,13 @@ def build_html(spots, days_by_spot, updated):
     background: #0f4c2f;
     border-radius: 12px;
     padding: 12px 14px;
+  }}
+  .goodday .day-header {{
+    font-weight: 700;
+    font-size: 1.15em;
+    margin-bottom: 8px;
+  }}
+  .goodday .day-body {{
     line-height: 1.6;
     font-size: 0.92em;
   }}
