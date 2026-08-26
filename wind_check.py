@@ -45,6 +45,9 @@ PUSHOVER_USER = os.environ.get("PUSHOVER_USER")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 NTFY_TOPIC = os.environ.get("NTFY_TEST") if TEST_MODE else os.environ.get("NTFY_TOPIC")
+NTFY_TOPIC_BFT = os.environ.get("NTFY_TOPIC_BFT_TEST") if TEST_MODE else os.environ.get("NTFY_TOPIC_BFT")
+
+BEAUFORT_SCHWELLEN_KN = [1, 4, 7, 11, 17, 22, 28, 34, 41, 48, 56, 64]
 
 
 def load_spots():
@@ -84,6 +87,31 @@ def compass_direction(degrees):
     """Wandelt Gradzahl in 16er-Himmelsrichtung um (deutsche Abkürzung)."""
     index = round(degrees / 22.5) % 16
     return COMPASS_POINTS[index]
+
+
+def knots_to_beaufort(knots):
+    """Wandelt Windgeschwindigkeit in Knoten in die Beaufort-Skala (0-12) um."""
+    bft = 0
+    for schwelle in BEAUFORT_SCHWELLEN_KN:
+        if knots >= schwelle:
+            bft += 1
+        else:
+            break
+    return bft
+
+
+def format_speed_pair(speed, gust, unit):
+    """Formatiert Wind/Böen als 'X/Ykn' oder 'X/YBft', je nach unit."""
+    if unit == "bft":
+        return f"{knots_to_beaufort(speed)}/{knots_to_beaufort(gust)}Bft"
+    return f"{speed}/{gust}kn"
+
+
+def format_single_speed(speed, unit):
+    """Formatiert eine einzelne Windgeschwindigkeit als 'Xkn' oder 'XBft'."""
+    if unit == "bft":
+        return f"{knots_to_beaufort(speed)}Bft"
+    return f"{speed}kn"
 
 
 def average_direction(directions_deg):
@@ -275,7 +303,7 @@ def evaluate_spot_days(spot, hourly, default_min_knots, now):
     return days
 
 
-def format_day_line(day):
+def format_day_line(day, unit="kn"):
     """Formatiert einen Tag, der die Kriterien erfüllt: Wochentag, Zeitfenster,
     Durchschnittswind/-böen, Richtung, Shore-Typ – Stern nur bei 'top'-Richtung.
     Ort (falls vorhanden) steht in einer eigenen Zeile darunter."""
@@ -283,7 +311,8 @@ def format_day_line(day):
     stern = "⭐ " if day["label"] == "top" else ""
     zeitspanne = f"{day['start'].strftime('%H')}-{day['end'].strftime('%H')}h"
     shore_str = f" {day['shore']}" if day["shore"] else ""
-    zeile = f"{stern}{wd} {zeitspanne} {day['avg_speed']}/{day['avg_gust']}kn {day['compass']}{shore_str}"
+    speed_str = format_speed_pair(day["avg_speed"], day["avg_gust"], unit)
+    zeile = f"{stern}{wd} {zeitspanne} {speed_str} {day['compass']}{shore_str}"
 
     if day.get("ort"):
         zeile += f"\n📍 {day['ort']}"
@@ -293,18 +322,18 @@ def format_day_line(day):
     return zeile
 
 
-def format_best_day_line(name, days):
+def format_best_day_line(name, days, unit="kn"):
     """Ein-Zeiler für Spots ohne nennenswerten Wind: bester Tag (höchster
     Durchschnittswind, unabhängig von der Mindestschwelle) mit Wochentag."""
     candidates = [d for d in days if d.get("avg_speed") is not None]
     if candidates:
         best = max(candidates, key=lambda d: d["avg_speed"])
         wd = WEEKDAYS_DE_LANG[best["date"].weekday()]
-        return f"{name}: max {best['avg_speed']}kn am {wd}"
+        return f"{name}: max {format_single_speed(best['avg_speed'], unit)} am {wd}"
     return f"{name}: keine Vorhersagedaten verfügbar"
 
 
-def build_message(spots, days_by_spot):
+def build_message(spots, days_by_spot, unit="kn"):
     """Baut die Nachricht: Spots mit mind. einem Tag über der Mindestschwelle
     ('relevant') werden oben gezeigt – dort NUR die qualifizierenden Tage,
     schwache Tage werden bei relevanten Spots ausgeblendet. Alle anderen Spots
@@ -327,25 +356,25 @@ def build_message(spots, days_by_spot):
         lines.append(f"🏄 {name}")
         for day in days:
             if day["qualifies"]:
-                lines.append(format_day_line(day))
+                lines.append(format_day_line(day, unit))
         lines.append("")
 
     if others:
         lines.append("💤 Andere Spots ohne nennenswerten Wind:")
         for spot in others:
-            lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], [])))
+            lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], []), unit))
 
     return "\n".join(lines).strip()
 
 
-def build_summary_message(spots, days_by_spot):
+def build_summary_message(spots, days_by_spot, unit="kn"):
     """Fallback-Nachricht, wenn nirgendwo genug Wind ist: zeigt pro Spot nur
     den besten Tag (höchster Durchschnittswind, unabhängig von der
     Mindestschwelle) mit ausgeschriebenem Wochentag."""
     lines = [f"🌬️ Kein Spot hat aktuell nennenswerten Wind (nächste {FORECAST_DAYS} Tage)", ""]
 
     for spot in spots:
-        lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], [])))
+        lines.append(format_best_day_line(spot["name"], days_by_spot.get(spot["name"], []), unit))
 
     return "\n".join(lines)
 
@@ -367,20 +396,21 @@ def send_pushover(message, title="🌬️ Windsurf-Vorhersage"):
         print(f"Fehler beim Pushover-Versand: {e}", file=sys.stderr)
 
 
-def send_ntfy(message, title="🌬️ Windsurf-Vorhersage"):
-    if not NTFY_TOPIC:
-        print("NTFY_TOPIC fehlt – ntfy-Versand übersprungen.")
+def send_ntfy(message, title="🌬️ Windsurf-Vorhersage", topic=None):
+    topic = topic if topic is not None else NTFY_TOPIC
+    if not topic:
+        print("Kein ntfy-Topic gesetzt – Versand übersprungen.")
         return
     try:
         resp = requests.post(NTFY_SERVER, json={
-            "topic": NTFY_TOPIC,
+            "topic": topic,
             "title": title,
             "message": message,
         }, timeout=20)
         resp.raise_for_status()
-        print("ntfy-Nachricht verschickt.")
+        print(f"ntfy-Nachricht verschickt (Topic: {topic}).")
     except Exception as e:
-        print(f"Fehler beim ntfy-Versand: {e}", file=sys.stderr)
+        print(f"Fehler beim ntfy-Versand (Topic: {topic}): {e}", file=sys.stderr)
 
 
 def main():
@@ -397,20 +427,26 @@ def main():
         except Exception as e:
             print(f"Fehler bei Spot {spot['name']}: {e}", file=sys.stderr)
 
-    message = build_message(spots, days_by_spot)
+    message_kn = build_message(spots, days_by_spot, unit="kn")
 
-    if message:
-        send_pushover(message)
-        send_ntfy(message)
-        print("\nGesendete Nachricht:\n")
-        print(message)
+    if message_kn:
+        message_bft = build_message(spots, days_by_spot, unit="bft")
+        send_pushover(message_kn)
+        send_ntfy(message_kn, topic=NTFY_TOPIC)
+        send_ntfy(message_bft, topic=NTFY_TOPIC_BFT)
+        print("\nGesendete Nachricht (kn):\n")
+        print(message_kn)
+        print("\nGesendete Nachricht (Bft):\n")
+        print(message_bft)
     else:
-        summary = build_summary_message(spots, days_by_spot)
+        summary_kn = build_summary_message(spots, days_by_spot, unit="kn")
+        summary_bft = build_summary_message(spots, days_by_spot, unit="bft")
         title = "🌬️ Windsurf-Vorhersage (kein Spot geeignet)"
-        send_pushover(summary, title=title)
-        send_ntfy(summary, title=title)
+        send_pushover(summary_kn, title=title)
+        send_ntfy(summary_kn, title=title, topic=NTFY_TOPIC)
+        send_ntfy(summary_bft, title=title, topic=NTFY_TOPIC_BFT)
         print("\nKein Spot erfüllt die Kriterien – Übersichts-Nachricht verschickt:\n")
-        print(summary)
+        print(summary_kn)
 
 
 if __name__ == "__main__":
